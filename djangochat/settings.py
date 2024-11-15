@@ -28,6 +28,11 @@ DEBUG = True
 
 ALLOWED_HOSTS = []
 
+LOGOUT_REDIRECT_URL = '/'
+LOGIN_REDIRECT_URL = '/rooms/'
+LOGIN_URL= '/login/'
+
+
 
 # Application definition
 
@@ -40,6 +45,7 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'core',
     'channels',
+    'room',
 
 ]
 
