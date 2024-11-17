@@ -1,6 +1,10 @@
 import json
+from operator import concat
+# from os import sync
 from re import S
 from channels.generic.websocket import AsyncWebsocketConsumer
+from .models import Room, Message
+from django.contrib.auth.models import User
 
 class ChatConsumer(AsyncWebsocketConsumer):
     async def connect(self):
@@ -28,6 +32,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
         username = data['username']
         room = data['room']
 
+        await self.save_message(username, room, message) # type: ignore
+
         await self.channel_layer.group_send(           # type: ignore
             self.room_group_name,                               # type: ignore
              {
@@ -47,3 +53,11 @@ class ChatConsumer(AsyncWebsocketConsumer):
             'username': username,
             'room': room, 
         }))
+
+
+        @sync_to_async # type: ignore
+        def save_message(username, room, message):
+            user= User.objects.get(username=username)
+            room= Room.objects.get(slug=room)
+
+            Message.objects.create(user=user, room=room, content=message)
