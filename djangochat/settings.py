@@ -28,11 +28,6 @@ DEBUG = True
 
 ALLOWED_HOSTS = []
 
-LOGOUT_REDIRECT_URL = '/'
-LOGIN_REDIRECT_URL = '/rooms/'
-LOGIN_URL= '/login/'
-
-
 
 # Application definition
 
@@ -43,10 +38,9 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    'core',
     'channels',
     'room',
-
+    'core',
 ]
 
 MIDDLEWARE = [
@@ -80,12 +74,17 @@ TEMPLATES = [
 WSGI_APPLICATION = 'djangochat.wsgi.application'
 ASGI_APPLICATION = 'djangochat.asgi.application'
 
-CHANNEL_LAYERS ={
-    'default':{
+CHANNEL_LAYERS = {
+    'default': {
         'BACKEND': 'channels.layers.InMemoryChannelLayer'
     }
 }
 
+LOGIN_URL = 'login'
+LOGIN_REDIRECT_URL = 'rooms'
+LOGOUT_REDIRECT_URL = 'login'
+
+WEBSOCKET_ACCEPT_ALL = True  # For development only
 
 # Database
 # https://docs.djangoproject.com/en/5.1/ref/settings/#databases

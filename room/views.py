@@ -1,14 +1,12 @@
+from django.shortcuts import render, get_object_or_404, redirect
 from django.contrib.auth.decorators import login_required
-from django.shortcuts import render, redirect, get_object_or_404
-from django.contrib.auth.models import User
 from django.http import JsonResponse
-from django.contrib import messages
-from .models import Room, Message, Invitation
-from django.utils.text import slugify
 from django.db.models import Q
-import uuid
-from django.urls import reverse
-from django.conf import settings
+from django.utils.text import slugify
+from .models import Room, Message
+from django.contrib.auth.models import User
+from django.utils import timezone
+import json
 
 def generate_unique_slug(name):
     """Generate a unique slug for a room name."""
@@ -24,208 +22,350 @@ def generate_unique_slug(name):
 
 @login_required
 def rooms(request):
-    rooms = Room.objects.filter(participants=request.user)
-    invitations = Invitation.objects.filter(invited_user=request.user, accepted=False)
+    """View for listing all rooms the user is part of."""
+    rooms = Room.objects.filter(
+        Q(participants=request.user) | Q(is_private=False)
+    ).distinct()
+    
     return render(request, 'room/rooms.html', {
-        'rooms': rooms,
-        'invitations': invitations
+        'rooms': rooms
     })
 
 @login_required
 def create_room(request):
     if request.method == 'POST':
-        room_name = request.POST.get('room_name')
+        room_name = request.POST.get('name', '').strip()
+        is_private = request.POST.get('is_private', 'true') == 'true'
+        description = request.POST.get('description', '').strip()
+        
         if room_name:
-            # Generate a unique slug
+            # Create unique slug
             slug = generate_unique_slug(room_name)
             
-            # Create the room with the unique slug
+            # Create room
             room = Room.objects.create(
-                name=room_name, 
+                name=room_name,
                 slug=slug,
-                created_by=request.user
+                created_by=request.user,
+                is_private=is_private,
+                description=description
             )
+            
+            # Add creator as participant
             room.participants.add(request.user)
-            return redirect('room', slug=slug)
-    return render(request, 'room/create_room.html')
+            
+            # Add other participants if specified
+            participant_usernames = request.POST.getlist('participants')
+            if participant_usernames:
+                participants = User.objects.filter(username__in=participant_usernames)
+                room.participants.add(*participants)
+            
+            return redirect('room', slug=room.slug)
+    
+    # Get all users except the current user for the participant selection
+    users = User.objects.exclude(id=request.user.id).order_by('username')
+    return render(request, 'room/create_room.html', {'users': users})
 
 @login_required
 def room(request, slug):
     room = get_object_or_404(Room, slug=slug)
     
-    # Check if user is a participant
-    if request.user not in room.participants.all():
-        invitation = Invitation.objects.filter(
-            Q(room=room) & 
-            (Q(invited_user=request.user) | Q(invited_user__isnull=True)),
-            accepted=False
-        ).first()
-        
-        if invitation:
-            if request.method == 'POST' and 'accept_invitation' in request.POST:
-                invitation.accepted = True
-                invitation.invited_user = request.user
-                invitation.save()
-                room.participants.add(request.user)
-            else:
-                return render(request, 'room/invitation_prompt.html', {'invitation': invitation})
-        else:
-            messages.error(request, "You don't have access to this room.") # type: ignore
-            return redirect('rooms')
-
-    # Handle message posting
-    if request.method == 'POST' and 'content' in request.POST:
-        content = request.POST.get('content', '').strip()
-        if content:
-            Message.objects.create(
-                room=room,
-                user=request.user,
-                content=content
-            )
-            return redirect('room', slug=slug)
-
-    # Get all messages for the room
-    chat_messages = Message.objects.filter(room=room).select_related('user').order_by('date_added')
-    users = User.objects.exclude(id=request.user.id).exclude(chat_rooms=room)
+    # Check if user has access to the room
+    if room.is_private and request.user not in room.participants.all():
+        messages.error(request, "You don't have access to this room.")
+        return redirect('rooms')
     
-    # Get other rooms where the user is a participant
-    other_rooms = Room.objects.filter(participants=request.user).exclude(id=room.id) # type: ignore
+    # Get messages for the room
+    messages = Message.objects.filter(room=room).order_by('-date_added')
+    # Get the last 50 messages and reverse them for display
+    messages_to_display = messages[:50][::-1]
+    
+    # Get all rooms the user is part of
+    other_rooms = Room.objects.filter(
+        Q(participants=request.user) | Q(created_by=request.user)
+    ).exclude(slug=slug).order_by('-last_activity')[:10]
+    
+    # Check if user is room admin
+    is_room_admin = room.created_by == request.user
+    
+    # Check if user can invite others (admin or participant in private room)
+    can_invite = is_room_admin or (room.is_private and request.user in room.participants.all())
+    
+    # Mark unread messages as read
+    unread_messages = Message.objects.filter(
+        room=room,
+        is_read=False
+    ).exclude(user=request.user)
+    
+    for message in unread_messages:
+        message.mark_as_read(request.user)
+    
+    # Get online participants
+    online_participants = room.get_online_participants()
     
     return render(request, 'room/room.html', {
         'room': room,
-        'messages': chat_messages,
-        'users': users,
+        'messages': messages_to_display,
         'other_rooms': other_rooms,
-        'current_user': request.user
+        'is_room_admin': is_room_admin,
+        'can_invite': can_invite,
+        'participants': room.participants.all(),
+        'online_participants': online_participants,
     })
 
 @login_required
-def generate_invite_link(request, slug):
-    room = get_object_or_404(Room, slug=slug)
-    if request.user not in room.participants.all():
-        return JsonResponse({'status': 'error', 'message': 'You are not a participant of this room'})
-    
-    # Create an invitation without a specific user
-    invitation = Invitation.objects.create(
-        room=room,
-        invited_by=request.user,
-        invited_user=None
-    )
-    
-    # Generate the invitation link
-    invite_url = request.build_absolute_uri(
-        reverse('join-room', kwargs={'invite_code': invitation.invite_code})
-    )
-    
-    return JsonResponse({
-        'status': 'success',
-        'invite_link': invite_url,
-        'message': 'Invitation link generated successfully'
-    })
-
-@login_required
-def join_room(request, invite_code):
-    invitation = get_object_or_404(Invitation, invite_code=invite_code, accepted=False)
-    
-    # Check if the invitation is already used
-    if invitation.invited_user and invitation.invited_user != request.user:
-        messages.error(request, "This invitation has already been used by another user.") # type: ignore
-        return redirect('rooms')
-    
+def send_message(request, slug):
     if request.method == 'POST':
-        invitation.accepted = True
-        invitation.invited_user = request.user
-        invitation.save()
-        
-        invitation.room.participants.add(request.user)
-        messages.success(request, f"You have joined the room: {invitation.room.name}") # type: ignore
-        return redirect('room', slug=invitation.room.slug)
+        try:
+            data = json.loads(request.body)
+            content = data.get('message', '').strip()
+            
+            if content:
+                room = get_object_or_404(Room, slug=slug)
+                message = Message.objects.create(
+                    room=room,
+                    user=request.user,
+                    content=content
+                )
+                
+                # Update room's last activity
+                room.last_activity = timezone.now()
+                room.save()
+                
+                return JsonResponse({
+                    'status': 'success',
+                    'message': {
+                        'id': message.id,
+                        'content': message.content,
+                        'username': message.user.username,
+                        'timestamp': message.date_added.isoformat(),
+                        'is_read': False,
+                        'read_by_count': 0
+                    }
+                })
+                
+        except json.JSONDecodeError:
+            pass
+            
+    return JsonResponse({'status': 'error'}, status=400)
+
+@login_required
+def get_messages(request, slug):
+    room = get_object_or_404(Room, slug=slug)
+    before_id = request.GET.get('before_id')
     
-    return render(request, 'room/join_room.html', {
-        'invitation': invitation
-    })
+    messages_query = Message.objects.filter(room=room)
+    
+    if before_id:
+        messages_query = messages_query.filter(id__lt=before_id)
+    
+    messages = messages_query.order_by('-date_added')[:20]
+    
+    messages_data = [{
+        'id': msg.id,
+        'content': msg.content,
+        'username': msg.user.username,
+        'timestamp': msg.date_added.isoformat(),
+        'is_read': msg.is_read,
+        'read_by_count': msg.read_by_users.count()
+    } for msg in messages]
+    
+    return JsonResponse({'messages': messages_data})
+
+@login_required
+def mark_as_read(request, slug):
+    if request.method == 'POST':
+        room = get_object_or_404(Room, slug=slug)
+        message_ids = json.loads(request.body).get('message_ids', [])
+        
+        if message_ids:
+            messages = Message.objects.filter(
+                room=room,
+                id__in=message_ids,
+                is_read=False
+            ).exclude(user=request.user)
+            
+            for message in messages:
+                message.mark_as_read(request.user)
+                
+        return JsonResponse({'status': 'success'})
+        
+    return JsonResponse({'status': 'error'}, status=400)
+
+@login_required
+def join_room(request, slug):
+    room = get_object_or_404(Room, slug=slug)
+    
+    if not room.is_private:
+        room.participants.add(request.user)
+        messages.success(request, f'You have joined the room: {room.name}')
+        return redirect('room', slug=room.slug)
+    else:
+        messages.error(request, 'This is a private room. You need an invitation to join.')
+        return redirect('rooms')
+
+@login_required
+def load_more_messages(request, slug):
+    """AJAX view for loading older messages."""
+    room = get_object_or_404(Room, slug=slug)
+    
+    if request.user not in room.participants.all():
+        return JsonResponse({'status': 'error', 'message': 'Not authorized'})
+    
+    try:
+        last_message_id = request.GET.get('last_message_id')
+        messages_queryset = Message.objects.filter(
+            room=room,
+            id__lt=last_message_id
+        ).select_related('user')\
+            .order_by('-date_added')[:20]
+        
+        messages_data = [{
+            'id': msg.id,
+            'content': msg.content,
+            'username': msg.user.username,
+            'timestamp': msg.date_added.isoformat(),
+            'is_own_message': msg.user == request.user
+        } for msg in messages_queryset]
+        
+        return JsonResponse({
+            'status': 'success',
+            'messages': messages_data,
+            'has_more': messages_queryset.exists() and \
+                Message.objects.filter(room=room, id__lt=messages_queryset.last().id).exists()
+        })
+    except Exception as e:
+        return JsonResponse({'status': 'error', 'message': str(e)})
 
 @login_required
 def invite_user(request, slug):
+    """View for inviting users to a private room."""
+    room = get_object_or_404(Room, slug=slug)
+    
+    if request.user != room.created_by:
+        return JsonResponse({'status': 'error', 'message': 'Only room creator can invite users'})
+    
+    if not room.is_private:
+        return JsonResponse({'status': 'error', 'message': 'Cannot invite to public room'})
+    
     if request.method == 'POST':
-        room = get_object_or_404(Room, slug=slug)
-        if request.user not in room.participants.all():
-            return JsonResponse({'status': 'error', 'message': 'You are not a participant of this room'})
-        
-        user_id = request.POST.get('user_id')
-        if user_id:
-            invited_user = get_object_or_404(User, id=user_id)
-            if invited_user not in room.participants.all():
+        try:
+            data = json.loads(request.body)
+            username = data.get('username', '').strip()
+            
+            if not username:
+                return JsonResponse({'status': 'error', 'message': 'Username is required'})
+            
+            try:
+                user = User.objects.get(username=username)
+                
+                if user == request.user:
+                    return JsonResponse({'status': 'error', 'message': 'Cannot invite yourself'})
+                
+                if user in room.participants.all():
+                    return JsonResponse({'status': 'error', 'message': 'User is already in the room'})
+                
+                # Create invitation
                 invitation = Invitation.objects.create(
                     room=room,
                     invited_by=request.user,
-                    invited_user=invited_user
-                )
-                return JsonResponse({
-                    'status': 'success',
-                    'message': f'Invitation sent to {invited_user.username}',
-                    'invite_link': request.build_absolute_uri(
-                        reverse('join-room', kwargs={'invite_code': invitation.invite_code})
-                    )
-                })
-            else:
-                return JsonResponse({'status': 'error', 'message': 'User is already a participant'})
-    
-    return JsonResponse({'status': 'error', 'message': 'Invalid request'})
-
-@login_required
-def get_room_members(request, slug):
-    room = get_object_or_404(Room, slug=slug)
-    if request.user not in room.participants.all():
-        return JsonResponse({'status': 'error', 'message': 'Access denied'})
-    
-    members = list(room.participants.values('id', 'username').exclude(id=request.user.id))
-    return JsonResponse({
-        'status': 'success',
-        'members': members
-    })
-
-@login_required
-def invite_from_room(request, slug):
-    if request.method == 'POST':
-        target_room = get_object_or_404(Room, slug=slug)
-        source_room_id = request.POST.get('source_room_id')
-        selected_users = request.POST.getlist('selected_users[]')
-        
-        # Verify permissions
-        if request.user not in target_room.participants.all():
-            return JsonResponse({'status': 'error', 'message': 'You are not a participant of the target room'})
-        
-        source_room = get_object_or_404(Room, id=source_room_id)
-        if request.user not in source_room.participants.all():
-            return JsonResponse({'status': 'error', 'message': 'You are not a participant of the source room'})
-        
-        # Send invitations
-        success_count = 0
-        already_member_count = 0
-        for user_id in selected_users:
-            try:
-                user = User.objects.get(id=user_id)
-                if user in target_room.participants.all():
-                    already_member_count += 1
-                    continue
-                    
-                Invitation.objects.get_or_create(
-                    room=target_room,
-                    invited_by=request.user,
                     invited_user=user
                 )
-                success_count += 1
+                
+                return JsonResponse({
+                    'status': 'success',
+                    'message': f'Invitation sent to {user.username}',
+                    'invite_code': str(invitation.invite_code)
+                })
             except User.DoesNotExist:
-                continue
-        
-        message = f'Successfully invited {success_count} users'
-        if already_member_count > 0:
-            message += f' ({already_member_count} were already members)'
-            
-        return JsonResponse({
-            'status': 'success',
-            'message': message
-        })
+                return JsonResponse({'status': 'error', 'message': 'User not found'})
+                
+        except json.JSONDecodeError:
+            return JsonResponse({'status': 'error', 'message': 'Invalid JSON data'})
     
-    return JsonResponse({'status': 'error', 'message': 'Invalid request'})
+    return JsonResponse({'status': 'error', 'message': 'Invalid request method'})
+
+@login_required
+def join_room_via_invitation(request, invite_code):
+    """View for joining a room via invitation."""
+    try:
+        invitation = get_object_or_404(
+            Invitation,
+            invite_code=invite_code,
+            accepted=False,
+            created_at__gt=timezone.now() - timedelta(days=7)
+        )
+        
+        if invitation.invited_user != request.user:
+            messages.error(request, 'This invitation is not for you.')
+            return redirect('rooms')
+        
+        # Accept invitation
+        invitation.accepted = True
+        invitation.save()
+        
+        # Add user to room
+        invitation.room.participants.add(request.user)
+        
+        messages.success(request, f'You have joined the room: {invitation.room.name}')
+        return redirect('room', slug=invitation.room.slug)
+        
+    except Invitation.DoesNotExist:
+        messages.error(request, 'Invalid or expired invitation.')
+        return redirect('rooms')
+
+@login_required
+def leave_room(request, slug):
+    """View for leaving a chat room."""
+    room = get_object_or_404(Room, slug=slug)
+    
+    if request.user == room.created_by:
+        messages.error(request, 'Room creator cannot leave the room.')
+        return redirect('room', slug=slug)
+    
+    if request.user in room.participants.all():
+        room.participants.remove(request.user)
+        messages.success(request, f'You have left the room: {room.name}')
+    
+    return redirect('rooms')
+
+@login_required
+def delete_room(request, slug):
+    """View for deleting a chat room."""
+    room = get_object_or_404(Room, slug=slug)
+    
+    if request.user != room.created_by:
+        messages.error(request, 'Only room creator can delete the room.')
+        return redirect('room', slug=slug)
+    
+    if request.method == 'POST':
+        room_name = room.name
+        room.delete()
+        messages.success(request, f'Room "{room_name}" has been deleted.')
+        return redirect('rooms')
+    
+    return render(request, 'room/delete_room.html', {'room': room})
+
+@login_required
+def room_settings(request, slug):
+    """View for managing room settings."""
+    room = get_object_or_404(Room, slug=slug)
+    
+    if request.user != room.created_by:
+        messages.error(request, 'Only room creator can modify settings.')
+        return redirect('room', slug=slug)
+    
+    if request.method == 'POST':
+        name = request.POST.get('name', '').strip()
+        is_private = request.POST.get('is_private') == 'on'
+        
+        if name:
+            room.name = name
+            room.is_private = is_private
+            room.save()
+            messages.success(request, 'Room settings updated successfully.')
+            return redirect('room', slug=room.slug)
+        else:
+            messages.error(request, 'Room name is required.')
+    
+    return render(request, 'room/room_settings.html', {'room': room})
