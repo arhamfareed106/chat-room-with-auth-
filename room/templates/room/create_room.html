@@ -1,0 +1,101 @@
+{% extends 'core/base.html' %}
+
+{% block title %}Create Room | {% endblock %}
+
+{% block content %}
+<style>
+    .form-container {
+        transform: translateY(20px);
+        animation: slideUp 0.5s ease forwards;
+    }
+    
+    @keyframes slideUp {
+        to {
+            transform: translateY(0);
+            opacity: 1;
+        }
+    }
+    
+    .input-field {
+        transition: all 0.3s ease;
+        border: 2px solid transparent;
+    }
+    
+    .input-field:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    }
+    
+    .input-field:focus {
+        border-color: #3b82f6;
+        transform: translateY(-2px);
+        box-shadow: 0 4px 6px rgba(59, 130, 246, 0.2);
+    }
+    
+    .create-button {
+        transition: all 0.3s ease;
+        position: relative;
+        overflow: hidden;
+    }
+    
+    .create-button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+    }
+    
+    .create-button:active {
+        transform: translateY(0);
+    }
+    
+    .back-link {
+        transition: all 0.3s ease;
+        position: relative;
+    }
+    
+    .back-link:after {
+        content: '';
+        position: absolute;
+        width: 100%;
+        height: 2px;
+        bottom: -2px;
+        left: 0;
+        background-color: #3b82f6;
+        transform: scaleX(0);
+        transform-origin: bottom right;
+        transition: transform 0.3s ease;
+    }
+    
+    .back-link:hover:after {
+        transform: scaleX(1);
+        transform-origin: bottom left;
+    }
+</style>
+
+<div class="p-10 lg:p-20 text-center">
+    <h1 class="text-3xl lg:text-6xl text-white font-bold mb-4">Create Room</h1>
+    <p class="text-gray-300 text-lg">Create a new chat room and start conversations</p>
+</div>
+
+<div class="w-full flex justify-center">
+    <form method="post" action="." class="form-container w-full max-w-xl bg-white rounded-lg px-8 pt-6 pb-8 mb-4 shadow-2xl opacity-0">
+        {% csrf_token %}
+        
+        <div class="mb-6">
+            <label class="block text-gray-700 text-sm font-bold mb-3" for="room_name">
+                Room Name
+            </label>
+            <input class="input-field shadow appearance-none border rounded-lg w-full py-3 px-4 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
+                   id="room_name" name="room_name" type="text" placeholder="Enter room name" required>
+            <p class="text-gray-500 text-xs mt-2">Choose a unique and descriptive name for your room</p>
+        </div>
+
+        <div class="flex items-center justify-between">
+            <button class="create-button bg-blue-500 hover:bg-blue-600 text-white font-bold py-3 px-6 rounded-lg focus:outline-none focus:shadow-outline"
+                    type="submit">
+                Create Room
+            </button>
+            <a href="{% url 'rooms' %}" class="back-link text-blue-500 hover:text-blue-700 font-semibold">Back to Rooms</a>
+        </div>
+    </form>
+</div>
+{% endblock %}

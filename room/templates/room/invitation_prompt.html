@@ -1,0 +1,47 @@
+{% extends 'core/base.html' %}
+
+{% block title %}Room Invitation | {% endblock %}
+
+{% block content %}
+<div class="min-h-screen flex items-center justify-center bg-gray-900">
+    <div class="bg-white p-8 rounded-lg shadow-xl max-w-md w-full">
+        <div class="text-center mb-8">
+            <h2 class="text-2xl font-bold text-gray-800 mb-2">Chat Room Invitation</h2>
+            <p class="text-gray-600">
+                {{ invitation.invited_by.username }} has invited you to join
+                <span class="font-semibold">{{ invitation.room.name }}</span>
+            </p>
+        </div>
+
+        <div class="space-y-4">
+            <div class="bg-blue-50 rounded-lg p-4">
+                <p class="text-sm text-blue-800">
+                    Join this private chat room to start messaging with other participants.
+                </p>
+            </div>
+
+            <form method="post" class="space-y-4">
+                {% csrf_token %}
+                <input type="hidden" name="accept_invitation" value="true">
+                
+                <div class="flex space-x-4">
+                    <button type="submit" 
+                            class="flex-1 bg-blue-600 text-white py-2 px-4 rounded-lg hover:bg-blue-700 transition-colors duration-200">
+                        Accept Invitation
+                    </button>
+                    <a href="{% url 'rooms' %}" 
+                       class="flex-1 bg-gray-200 text-gray-800 py-2 px-4 rounded-lg hover:bg-gray-300 transition-colors duration-200 text-center">
+                        Decline
+                    </a>
+                </div>
+            </form>
+        </div>
+
+        <div class="mt-6 text-center">
+            <p class="text-sm text-gray-500">
+                Invited {{ invitation.created_at|timesince }} ago
+            </p>
+        </div>
+    </div>
+</div>
+{% endblock %}
