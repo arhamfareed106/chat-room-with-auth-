@@ -89,7 +89,7 @@ def room(request, slug):
     users = User.objects.exclude(id=request.user.id).exclude(chat_rooms=room)
     
     # Get other rooms where the user is a participant
-    other_rooms = Room.objects.filter(participants=request.user).exclude(id=room.id)
+    other_rooms = Room.objects.filter(participants=request.user).exclude(id=room.id) # type: ignore
     
     return render(request, 'room/room.html', {
         'room': room,
