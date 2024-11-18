@@ -3,10 +3,11 @@ from django.contrib.auth.decorators import login_required
 from django.http import JsonResponse
 from django.db.models import Q
 from django.utils.text import slugify
-from .models import Room, Message
+from .models import Room, Message, Invitation
 from django.contrib.auth.models import User
 from django.utils import timezone
 import json
+from datetime import timedelta
 
 def generate_unique_slug(name):
     """Generate a unique slug for a room name."""
@@ -190,7 +191,7 @@ def mark_as_read(request, slug):
                 
         return JsonResponse({'status': 'success'})
         
-    return JsonResponse({'status': 'error'}, status=400)
+    return JsonResponse({'status': 'error', 'message': 'Invalid request method'}, status=405)
 
 @login_required
 def join_room(request, slug):
@@ -238,81 +239,147 @@ def load_more_messages(request, slug):
         return JsonResponse({'status': 'error', 'message': str(e)})
 
 @login_required
-def invite_user(request, slug):
-    """View for inviting users to a private room."""
+def invite_to_room(request, slug):
     room = get_object_or_404(Room, slug=slug)
     
-    if request.user != room.created_by:
-        return JsonResponse({'status': 'error', 'message': 'Only room creator can invite users'})
-    
-    if not room.is_private:
-        return JsonResponse({'status': 'error', 'message': 'Cannot invite to public room'})
+    # Check if user has permission to invite
+    if not (request.user == room.created_by or request.user in room.participants.all()):
+        return JsonResponse({'status': 'error', 'message': 'You do not have permission to invite users to this room.'}, status=403)
     
     if request.method == 'POST':
         try:
             data = json.loads(request.body)
-            username = data.get('username', '').strip()
+            usernames = data.get('usernames', [])
             
-            if not username:
-                return JsonResponse({'status': 'error', 'message': 'Username is required'})
+            successful_invites = []
+            failed_invites = []
             
-            try:
-                user = User.objects.get(username=username)
-                
-                if user == request.user:
-                    return JsonResponse({'status': 'error', 'message': 'Cannot invite yourself'})
-                
-                if user in room.participants.all():
-                    return JsonResponse({'status': 'error', 'message': 'User is already in the room'})
-                
-                # Create invitation
-                invitation = Invitation.objects.create(
-                    room=room,
-                    invited_by=request.user,
-                    invited_user=user
-                )
-                
-                return JsonResponse({
-                    'status': 'success',
-                    'message': f'Invitation sent to {user.username}',
-                    'invite_code': str(invitation.invite_code)
-                })
-            except User.DoesNotExist:
-                return JsonResponse({'status': 'error', 'message': 'User not found'})
-                
+            for username in usernames:
+                try:
+                    user = User.objects.get(username=username)
+                    
+                    # Check if user is already in the room
+                    if user in room.participants.all():
+                        failed_invites.append({'username': username, 'reason': 'Already in room'})
+                        continue
+                    
+                    # Check if invitation already exists
+                    if Invitation.objects.filter(room=room, invited_user=user, accepted=False).exists():
+                        failed_invites.append({'username': username, 'reason': 'Invitation pending'})
+                        continue
+                    
+                    # Create invitation
+                    invitation = Invitation.objects.create(
+                        room=room,
+                        invited_by=request.user,
+                        invited_user=user
+                    )
+                    successful_invites.append({
+                        'username': username,
+                        'invite_code': invitation.invite_code
+                    })
+                    
+                except User.DoesNotExist:
+                    failed_invites.append({'username': username, 'reason': 'User not found'})
+            
+            return JsonResponse({
+                'status': 'success',
+                'successful_invites': successful_invites,
+                'failed_invites': failed_invites
+            })
+            
         except json.JSONDecodeError:
-            return JsonResponse({'status': 'error', 'message': 'Invalid JSON data'})
+            return JsonResponse({'status': 'error', 'message': 'Invalid JSON data'}, status=400)
     
-    return JsonResponse({'status': 'error', 'message': 'Invalid request method'})
+    return JsonResponse({'status': 'error', 'message': 'Invalid request method'}, status=405)
 
 @login_required
-def join_room_via_invitation(request, invite_code):
-    """View for joining a room via invitation."""
-    try:
-        invitation = get_object_or_404(
-            Invitation,
-            invite_code=invite_code,
-            accepted=False,
-            created_at__gt=timezone.now() - timedelta(days=7)
-        )
-        
-        if invitation.invited_user != request.user:
-            messages.error(request, 'This invitation is not for you.')
-            return redirect('rooms')
-        
-        # Accept invitation
-        invitation.accepted = True
-        invitation.save()
+def accept_invitation(request, code):
+    invitation = get_object_or_404(Invitation, invite_code=code)
+    
+    # Check if invitation has expired
+    if invitation.is_expired():
+        return render(request, 'room/invitation_error.html', {
+            'error': 'This invitation has expired.'
+        })
+    
+    # Check if user is the invited user
+    if invitation.invited_user != request.user:
+        return render(request, 'room/invitation_error.html', {
+            'error': 'This invitation is not for you.'
+        })
+    
+    # Check if already accepted
+    if invitation.accepted:
+        return redirect('room', slug=invitation.room.slug)
+    
+    # Accept invitation
+    invitation.accepted = True
+    invitation.save()
+    
+    # Add user to room
+    invitation.room.participants.add(request.user)
+    
+    return redirect('room', slug=invitation.room.slug)
+
+@login_required
+def my_invitations(request):
+    # Get pending invitations for the user
+    pending_invitations = Invitation.objects.filter(
+        invited_user=request.user,
+        accepted=False
+    ).select_related('room', 'invited_by').order_by('-created_at')
+    
+    return render(request, 'room/my_invitations.html', {
+        'invitations': pending_invitations
+    })
+
+@login_required
+def generate_invite_link(request, slug):
+    room = get_object_or_404(Room, slug=slug)
+    
+    # Check if user has permission to generate invite link
+    if not (request.user == room.created_by or request.user in room.participants.all()):
+        return JsonResponse({'status': 'error', 'message': 'Permission denied'}, status=403)
+    
+    # Create an open invitation (no specific invited user)
+    invitation = Invitation.objects.create(
+        room=room,
+        invited_by=request.user,
+        invited_user=None  # This makes it an open invitation
+    )
+    
+    invite_url = request.build_absolute_uri(f'/rooms/join/{invitation.invite_code}/')
+    
+    return JsonResponse({
+        'status': 'success',
+        'invite_url': invite_url,
+        'invite_code': str(invitation.invite_code)
+    })
+
+@login_required
+def join_room_via_invitation(request, code):
+    invitation = get_object_or_404(Invitation, invite_code=code)
+    
+    # Check if invitation has expired
+    if invitation.is_expired():
+        return render(request, 'room/invitation_error.html', {
+            'error': 'This invitation has expired.'
+        })
+    
+    # If it's an open invitation (no specific invited user)
+    if invitation.invited_user is None:
+        # Check if user is already in the room
+        if request.user in invitation.room.participants.all():
+            return redirect('room', slug=invitation.room.slug)
         
         # Add user to room
         invitation.room.participants.add(request.user)
-        
-        messages.success(request, f'You have joined the room: {invitation.room.name}')
         return redirect('room', slug=invitation.room.slug)
-        
-    except Invitation.DoesNotExist:
-        messages.error(request, 'Invalid or expired invitation.')
-        return redirect('rooms')
+    
+    return render(request, 'room/invitation_error.html', {
+        'error': 'This invitation is for a specific user.'
+    })
 
 @login_required
 def leave_room(request, slug):
@@ -369,3 +436,39 @@ def room_settings(request, slug):
             messages.error(request, 'Room name is required.')
     
     return render(request, 'room/room_settings.html', {'room': room})
+
+@login_required
+def search_users(request):
+    """Search for users to invite to a room."""
+    query = request.GET.get('q', '').strip()
+    
+    if query:
+        users = User.objects.filter(
+            username__icontains=query
+        ).exclude(
+            id=request.user.id
+        ).values('username')[:10]
+    else:
+        users = User.objects.exclude(
+            id=request.user.id
+        ).values('username')[:10]
+    
+    return JsonResponse({'users': list(users)})
+
+@login_required
+def decline_invitation(request, code):
+    """Decline a room invitation."""
+    if request.method == 'POST':
+        invitation = get_object_or_404(
+            Invitation,
+            invite_code=code,
+            invited_user=request.user,
+            accepted=False
+        )
+        
+        # Delete the invitation
+        invitation.delete()
+        
+        return JsonResponse({'status': 'success'})
+    
+    return JsonResponse({'status': 'error', 'message': 'Invalid request method'}, status=405)
