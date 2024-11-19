@@ -68,7 +68,6 @@ def create_room(request):
 
 @login_required
 def room(request, slug):
-    """View for displaying a chat room."""
     room = get_object_or_404(Room, slug=slug)
     
     if room.is_private and request.user not in room.participants.all():
@@ -87,26 +86,32 @@ def room(request, slug):
         messages.error(request, "You don't have access to this room.")
         return redirect('rooms')
     
-    # Add current user to room participants if not already added
-    if request.user not in room.participants.all():
-        room.participants.add(request.user)
-    
     # Get messages for this room
-    messages = Message.objects.filter(room=room).order_by('-date_added')[:50]
+    room_messages = Message.objects.filter(room=room).order_by('-date_added')[:50]
     
     # Get all participants in the room
     participants = room.participants.all()
     
-    # Get online users (we'll implement this in the consumer)
-    online_users = room.get_online_participants()
-    
-    is_room_admin = room.created_by == request.user
-    can_invite = is_room_admin or (room.is_private and request.user in room.participants.all())
+    # Get targeted message counts for each participant
+    participants_with_messages = []
+    for participant in participants.exclude(id=request.user.id):
+        unread_count = Message.objects.filter(
+            room=room,
+            user=participant,
+            target_user=request.user,
+        ).exclude(read_by_users=request.user).count()
+        
+        participants_with_messages.append({
+            'user': participant,
+            'unread_count': unread_count
+        })
     
     # Mark unread messages as read
     unread_messages = Message.objects.filter(
         room=room,
         is_read=False
+    ).filter(
+        Q(target_user=request.user) | Q(target_user__isnull=True)
     ).exclude(user=request.user)
     
     for message in unread_messages:
@@ -114,27 +119,46 @@ def room(request, slug):
     
     return render(request, 'room/room.html', {
         'room': room,
-        'messages': messages,
-        'participants': participants,
-        'online_users': online_users,
-        'is_room_admin': is_room_admin,
-        'can_invite': can_invite,
+        'messages': room_messages,
+        'participants': participants_with_messages,
+        'online_users': room.get_online_participants(),
+        'is_room_admin': room.created_by == request.user,
+        'can_invite': room.created_by == request.user or (
+            room.is_private and request.user in room.participants.all()
+        ),
     })
 
 @login_required
 def send_message(request, slug):
-    """View for handling message sending."""
+    """View for handling message sending with targeting capability."""
     if request.method == 'POST':
         try:
             data = json.loads(request.body)
             content = data.get('message', '').strip()
+            target_username = data.get('target_user')  # Username of targeted user
             
             if content:
                 room = get_object_or_404(Room, slug=slug)
+                target_user = None
+                is_targeted = False
+
+                # Handle targeting
+                if target_username:
+                    try:
+                        target_user = User.objects.get(
+                            username=target_username,
+                            pk__in=room.participants.values_list('id', flat=True)
+                        )
+                        is_targeted = True
+                    except User.DoesNotExist:
+                        pass
+
                 message = Message.objects.create(
                     room=room,
                     user=request.user,
-                    content=content
+                    content=content,
+                    target_user=target_user,
+                    is_targeted=is_targeted
                 )
                 
                 # Update room's last activity
@@ -150,7 +174,9 @@ def send_message(request, slug):
                         'username': message.user.username,
                         'timestamp': message.date_added.isoformat(),
                         'is_read': False,
-                        'read_by_count': 0
+                        'read_by_count': 0,
+                        'target_user': target_user.username if target_user else None,
+                        'is_targeted': is_targeted
                     }
                 })
         except json.JSONDecodeError:
@@ -162,10 +188,23 @@ def send_message(request, slug):
 def get_messages(request, slug):
     room = get_object_or_404(Room, slug=slug)
     before_id = request.GET.get('before_id')
+    target_user = request.GET.get('target_user')
     
     messages_query = Message.objects.filter(room=room)
     if before_id:
         messages_query = messages_query.filter(id__lt=before_id)
+        
+    # Filter for targeted conversations if requested
+    if target_user:
+        try:
+            other_user = User.objects.get(username=target_user)
+            messages_query = messages_query.filter(
+                Q(user=request.user, target_user=other_user) |
+                Q(user=other_user, target_user=request.user) |
+                Q(target_user__isnull=True)  # Include non-targeted messages
+            )
+        except User.DoesNotExist:
+            pass
     
     messages = messages_query.order_by('-date_added')[:20]
     
@@ -175,7 +214,9 @@ def get_messages(request, slug):
         'username': msg.user.username,
         'timestamp': msg.date_added.isoformat(),
         'is_read': msg.is_read,
-        'read_by_count': msg.read_by_users.count()
+        'read_by_count': msg.read_by_users.count(),
+        'target_user': msg.target_user.username if msg.target_user else None,
+        'is_targeted': msg.is_targeted
     } for msg in messages]
     
     return JsonResponse({'messages': messages_data})
