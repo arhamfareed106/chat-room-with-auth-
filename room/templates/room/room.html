@@ -95,19 +95,19 @@
             <div class="flex {% if message.user == request.user %}justify-end{% endif %}" data-message-id="{{ message.id }}">
                 <div class="{% if message.user == request.user %}bg-teal-100 text-teal-900{% else %}bg-gray-100 text-gray-900{% endif %} rounded-lg px-4 py-2 max-w-[70%] group">
                     <div class="flex items-center {% if message.user == request.user %}justify-end{% endif %} mb-1">
-                        <span class="font-medium text-sm">{{ message.user.username }}</span>
-                        <span class="text-xs text-gray-500 ml-2">{{ message.date_added|date:'g:i A' }}</span>
+                        <span class="font-medium">{{ message.user.username }}</span>
+                        <span class="text-xs text-gray-500 ml-2">{{ message.date_added|time:"g:i A" }}</span>
                         {% if message.user == request.user %}
                         <span class="read-status ml-2 opacity-0 group-hover:opacity-100 transition-opacity text-xs text-gray-500">
-                            {% if message.read_by.all %}
-                            Read by {{ message.read_by.count }}
+                            {% if message.read_by_users.count > 0 %}
+                                Read by {{ message.read_by_users.count }}
                             {% else %}
-                            Sent
+                                Sent
                             {% endif %}
                         </span>
                         {% endif %}
                     </div>
-                    <p class="text-sm">{{ message.content }}</p>
+                    <p class="text-sm break-words">{{ message.content }}</p>
                 </div>
             </div>
             {% endfor %}
@@ -122,37 +122,18 @@
         <div id="typing-status" class="px-4 py-2 text-sm text-gray-500"></div>
 
         <!-- Message Input -->
-        <div class="border-t border-gray-200 p-4 bg-white">
-            <form id="chat-form" class="flex space-x-4">
-                {% csrf_token %}
-                <div class="flex-1 relative">
-                    <input type="text" id="chat-message-input" 
-                           class="w-full rounded-lg border-gray-300 focus:ring-teal-500 focus:border-teal-500 pr-10" 
-                           placeholder="Type your message...">
-                    <div class="absolute right-2 top-2 flex items-center space-x-2">
-                        <button type="button" id="emoji-button" class="text-gray-400 hover:text-gray-600">
-                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" 
-                                      d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-                            </svg>
-                        </button>
-                        <button type="button" id="file-button" class="text-gray-400 hover:text-gray-600">
-                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" 
-                                      d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"></path>
-                            </svg>
-                        </button>
-                    </div>
-                </div>
+        <form id="chat-form" class="bg-white border-t border-gray-200 p-4">
+            {% csrf_token %}
+            <div class="flex items-center space-x-2">
+                <input type="text" id="chat-message-input" 
+                       class="flex-1 rounded-lg border-gray-300 focus:border-teal-500 focus:ring-teal-500"
+                       placeholder="Type your message...">
                 <button type="submit" 
-                        class="px-4 py-2 bg-teal-600 text-white rounded-lg hover:bg-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:ring-offset-2 flex items-center">
-                    <span>Send</span>
-                    <svg class="w-4 h-4 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"></path>
-                    </svg>
+                        class="px-4 py-2 bg-teal-600 text-white rounded-lg hover:bg-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:ring-offset-2">
+                    Send
                 </button>
-            </form>
-        </div>
+            </div>
+        </form>
     </div>
 
     <!-- Participants Sidebar -->
@@ -236,190 +217,97 @@
 </div>
 
 <script>
-    // Get the chat messages container and form
-    const chatMessages = document.getElementById('chat-messages');
-    const chatForm = document.getElementById('chat-form');
-    const chatMessageInput = document.getElementById('chat-message-input');
-    const typingStatus = document.getElementById('typing-status');
-    let lastMessageId = null;
-    let isLoadingMessages = false;
-
-    // Create WebSocket connection
     const roomName = '{{ room.slug }}';
     const chatSocket = new WebSocket(
         'ws://' + window.location.host + '/ws/chat/' + roomName + '/'
     );
+    const chatMessages = document.getElementById('chat-messages');
+    const chatForm = document.getElementById('chat-form');
+    const chatInput = document.getElementById('chat-message-input');
+    const typingStatus = document.getElementById('typing-status');
+    let typingTimeout;
+
+    // Scroll to bottom of messages
+    function scrollToBottom() {
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+    scrollToBottom();
 
     // Handle WebSocket connection open
     chatSocket.onopen = function(e) {
-        console.log('WebSocket connection established');
+        console.log('WebSocket Connected');
     };
 
     // Handle WebSocket connection error
     chatSocket.onerror = function(e) {
-        console.error('WebSocket error:', e);
+        console.error('WebSocket Error:', e);
     };
 
     // Handle WebSocket connection close
     chatSocket.onclose = function(e) {
-        console.log('WebSocket connection closed');
+        console.log('WebSocket Disconnected');
     };
 
-    // Handle incoming WebSocket messages
+    // Handle incoming messages
     chatSocket.onmessage = function(e) {
         const data = JSON.parse(e.data);
-        
-        switch(data.type) {
-            case 'message':
-                appendMessage(data);
-                break;
-            case 'typing_status':
-                handleTypingStatus(data);
-                break;
-            case 'user_join':
-            case 'user_leave':
-                handleUserPresence(data);
-                break;
-            case 'read_receipt':
-                updateReadReceipt(data);
-                break;
+        console.log('Received:', data);  // Debug log
+
+        if (data.type === 'message') {
+            // Create message element
+            const messageDiv = document.createElement('div');
+            const isOwnMessage = data.username === '{{ request.user.username }}';
+            
+            messageDiv.className = `flex ${isOwnMessage ? 'justify-end' : ''} mb-4`;
+            messageDiv.innerHTML = `
+                <div class="${isOwnMessage ? 'bg-teal-100 text-teal-900' : 'bg-gray-100 text-gray-900'} rounded-lg px-4 py-2 max-w-[70%]">
+                    <div class="flex items-center gap-2 mb-1">
+                        <span class="font-medium">${data.username}</span>
+                        <span class="text-xs text-gray-500">${new Date(data.timestamp).toLocaleTimeString()}</span>
+                    </div>
+                    <p class="text-sm break-words">${data.message}</p>
+                </div>
+            `;
+            
+            chatMessages.appendChild(messageDiv);
+            scrollToBottom();
+        } else if (data.type === 'typing_status') {
+            if (data.username !== '{{ request.user.username }}') {
+                if (data.is_typing) {
+                    typingStatus.textContent = `${data.username} is typing...`;
+                } else {
+                    typingStatus.textContent = '';
+                }
+            }
         }
     };
 
-    function appendMessage(data) {
-        const messageElement = document.createElement('div');
-        const isOwnMessage = data.username === '{{ request.user.username }}';
-        
-        messageElement.className = `flex ${isOwnMessage ? 'justify-end' : ''}`;
-        messageElement.dataset.messageId = data.message_id;
-        
-        messageElement.innerHTML = `
-            <div class="${isOwnMessage ? 'bg-teal-100 text-teal-900' : 'bg-gray-100 text-gray-900'} rounded-lg px-4 py-2 max-w-[70%] group">
-                <div class="flex items-center ${isOwnMessage ? 'justify-end' : ''} mb-1">
-                    <span class="font-medium">${data.username}</span>
-                    <span class="text-xs text-gray-500 ml-2">${new Date(data.timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span>
-                    ${isOwnMessage ? `
-                        <span class="read-status ml-2 opacity-0 group-hover:opacity-100 transition-opacity text-xs text-gray-500">
-                            Sent
-                        </span>
-                    ` : ''}
-                </div>
-                <p class="text-sm break-words">${data.message}</p>
-            </div>
-        `;
-        
-        chatMessages.appendChild(messageElement);
-        chatMessages.scrollTop = chatMessages.scrollHeight;
-        
-        if (!isOwnMessage) {
-            markMessageAsRead(data.message_id);
-        }
-    }
-
-    // Initialize emoji picker
-    const emojiButton = document.querySelector('#emoji-button');
-    if (emojiButton) {
-        emojiButton.addEventListener('click', () => {
-            // You can integrate an emoji picker library here
-            // For example: emoji-mart or emoji-button
-            alert('Emoji picker coming soon!');
-        });
-    }
-
-    // Initialize file upload
-    const fileButton = document.querySelector('#file-button');
-    if (fileButton) {
-        fileButton.addEventListener('click', () => {
-            // You can implement file upload functionality here
-            alert('File upload coming soon!');
-        });
-    }
-
     // Handle message sending
-    chatForm.addEventListener('submit', async (e) => {
+    chatForm.addEventListener('submit', function(e) {
         e.preventDefault();
-        const message = chatMessageInput.value.trim();
         
+        const message = chatInput.value.trim();
         if (message) {
-            try {
-                const response = await fetch(`{% url 'send_message' room.slug %}`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value
-                    },
-                    body: JSON.stringify({ message })
-                });
-
-                if (response.ok) {
-                    chatMessageInput.value = '';
-                    const data = await response.json();
-                    if (data.status === 'success') {
-                        // Send message through WebSocket
-                        chatSocket.send(JSON.stringify({
-                            'type': 'message',
-                            'message': data.message.content,
-                            'username': data.message.username,
-                            'message_id': data.message.id,
-                            'timestamp': data.message.timestamp
-                        }));
-                    }
-                }
-            } catch (error) {
-                console.error('Error sending message:', error);
-            }
+            // Send message through WebSocket
+            chatSocket.send(JSON.stringify({
+                'type': 'message',
+                'message': message
+            }));
+            
+            // Clear input
+            chatInput.value = '';
         }
     });
-
-    // Load more messages when scrolling to top
-    chatMessages.addEventListener('scroll', () => {
-        if (chatMessages.scrollTop === 0 && !isLoadingMessages) {
-            loadMoreMessages();
-        }
-    });
-
-    async function loadMoreMessages() {
-        if (!lastMessageId) {
-            const firstMessage = chatMessages.firstElementChild;
-            if (firstMessage) {
-                lastMessageId = firstMessage.dataset.messageId;
-            }
-        }
-
-        isLoadingMessages = true;
-        loadMoreBtn.classList.remove('hidden');
-
-        try {
-            const response = await fetch(`{% url 'get_messages' room.slug %}?before_id=${lastMessageId}`);
-            const data = await response.json();
-
-            if (data.messages.length > 0) {
-                const fragment = document.createDocumentFragment();
-                data.messages.forEach(msg => {
-                    const messageElement = createMessageElement(msg);
-                    fragment.appendChild(messageElement);
-                });
-
-                const firstChild = chatMessages.firstChild;
-                chatMessages.insertBefore(fragment, firstChild);
-                lastMessageId = data.messages[data.messages.length - 1].id;
-            }
-        } catch (error) {
-            console.error('Error loading messages:', error);
-        } finally {
-            isLoadingMessages = false;
-            loadMoreBtn.classList.add('hidden');
-        }
-    }
 
     // Handle typing status
-    chatMessageInput.addEventListener('input', () => {
+    chatInput.addEventListener('input', function(e) {
         clearTimeout(typingTimeout);
+        
         chatSocket.send(JSON.stringify({
             'type': 'typing',
             'is_typing': true
         }));
-
+        
         typingTimeout = setTimeout(() => {
             chatSocket.send(JSON.stringify({
                 'type': 'typing',
@@ -427,398 +315,6 @@
             }));
         }, 1000);
     });
-
-    // Mark messages as read
-    function markMessageAsRead(messageId) {
-        fetch(`/room/${roomName}/mark-read/`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value
-            },
-            body: JSON.stringify({
-                message_ids: [messageId]
-            })
-        });
-    }
-
-    // Initial scroll to bottom
-    chatMessages.scrollTop = chatMessages.scrollHeight;
-
-    // Handle room settings button click (if admin)
-    const roomSettingsBtn = document.getElementById('roomSettingsBtn');
-    if (roomSettingsBtn) {
-        roomSettingsBtn.addEventListener('click', () => {
-            window.location.href = `{% url 'room_settings' room.slug %}`;
-        });
-    }
-
-    // Invitation System
-    let selectedUsers = new Set();
-
-    async function sendInvitations() {
-        if (selectedUsers.size === 0) {
-            showNotification('Please select at least one user to invite.', 'error');
-            return;
-        }
-        
-        for (const username of selectedUsers) {
-            try {
-                const response = await fetch(`{% url 'invite_by_username' room.slug %}`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value,
-                    },
-                    body: JSON.stringify({ username })
-                });
-
-                const data = await response.json();
-                showNotification(data.message, data.status === 'success' ? 'success' : 'error');
-            } catch (error) {
-                console.error('Error sending invitation:', error);
-                showNotification(`Failed to invite ${username}`, 'error');
-            }
-        }
-        
-        closeInviteModal();
-    }
-
-    async function generateInviteLink() {
-        try {
-            const response = await fetch(`{% url 'invite_by_username' room.slug %}`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value
-                },
-                body: JSON.stringify({ generate_link: true })
-            });
-
-            const data = await response.json();
-            if (data.status === 'success') {
-                const inviteLink = window.location.origin + data.invite_url;
-                navigator.clipboard.writeText(inviteLink).then(() => {
-                    showNotification('Invite link copied to clipboard!', 'success');
-                }).catch(() => {
-                    // Fallback for browsers that don't support clipboard API
-                    const tempInput = document.createElement('input');
-                    tempInput.value = inviteLink;
-                    document.body.appendChild(tempInput);
-                    tempInput.select();
-                    document.execCommand('copy');
-                    document.body.removeChild(tempInput);
-                    showNotification('Invite link copied to clipboard!', 'success');
-                });
-            } else {
-                showNotification(data.message || 'Failed to generate invite link', 'error');
-            }
-        } catch (error) {
-            console.error('Error generating invite link:', error);
-            showNotification('Failed to generate invite link', 'error');
-        }
-    }
-
-    function showInviteModal() {
-        document.getElementById('inviteModal').classList.remove('hidden');
-        searchUsers('');  // Load initial user list
-    }
-
-    function closeInviteModal() {
-        document.getElementById('inviteModal').classList.add('hidden');
-        selectedUsers.clear();
-        updateSelectedUsersList();
-    }
-
-    async function searchUsers(query) {
-        try {
-            const response = await fetch(`{% url 'search_users' %}?q=${encodeURIComponent(query)}`);
-            const data = await response.json();
-            
-            const userList = document.getElementById('userList');
-            userList.innerHTML = '';
-            
-            data.users.forEach(user => {
-                if (user.username !== '{{ user.username }}') {
-                    const userElement = document.createElement('div');
-                    userElement.className = `p-3 hover:bg-gray-50 cursor-pointer flex items-center justify-between ${selectedUsers.has(user.username) ? 'bg-teal-50' : ''}`;
-                    userElement.onclick = () => toggleUserSelection(user.username);
-                    userElement.innerHTML = `
-                        <span class="text-gray-900">${user.username}</span>
-                        ${selectedUsers.has(user.username) ? 
-                            '<span class="text-teal-600"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg></span>' 
-                            : ''}
-                    `;
-                    userList.appendChild(userElement);
-                }
-            });
-        } catch (error) {
-            console.error('Error searching users:', error);
-            showNotification('Error searching users', 'error');
-        }
-    }
-
-    function toggleUserSelection(username) {
-        if (selectedUsers.has(username)) {
-            selectedUsers.delete(username);
-        } else {
-            selectedUsers.add(username);
-        }
-        updateSelectedUsersList();
-        searchUsers(document.getElementById('searchUsers').value);
-    }
-
-    function updateSelectedUsersList() {
-        const selectedUsersList = document.getElementById('selectedUsers');
-        selectedUsersList.innerHTML = '';
-        
-        if (selectedUsers.size === 0) {
-            selectedUsersList.innerHTML = '<div class="text-gray-500 text-sm">No users selected</div>';
-            return;
-        }
-
-        selectedUsers.forEach(username => {
-            const userTag = document.createElement('span');
-            userTag.className = 'inline-flex items-center px-2.5 py-1.5 rounded-full text-sm font-medium bg-teal-100 text-teal-800 mr-2 mb-2';
-            userTag.innerHTML = `
-                ${username}
-                <button onclick="event.stopPropagation(); toggleUserSelection('${username}')" class="ml-1 text-teal-600 hover:text-teal-800">
-                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
-                    </svg>
-                </button>
-            `;
-            selectedUsersList.appendChild(userTag);
-        });
-    }
-
-    function showNotification(message, type = 'info') {
-        const container = document.getElementById('notificationsContainer');
-        const notification = document.createElement('div');
-        
-        const bgColor = type === 'success' ? 'bg-green-500' : 
-                       type === 'error' ? 'bg-red-500' : 
-                       'bg-blue-500';
-        
-        notification.className = `${bgColor} text-white px-4 py-3 rounded-lg shadow-lg flex items-center justify-between`;
-        notification.innerHTML = `
-            <span>${message}</span>
-            <button onclick="this.parentElement.remove()" class="ml-4 text-white hover:text-gray-200">
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
-                </svg>
-            </button>
-        `;
-        
-        container.appendChild(notification);
-        
-        // Auto-remove notification after 5 seconds
-        setTimeout(() => {
-            notification.remove();
-        }, 5000);
-    }
-
-    // Add event listener for user search with debounce
-    document.getElementById('searchUsers').addEventListener('input', debounce((e) => searchUsers(e.target.value), 300));
-
-    // Handle invite button click
-    const inviteBtn = document.getElementById('inviteBtn');
-    if (inviteBtn) {
-        inviteBtn.addEventListener('click', showInviteModal);
-    }
-
-    // Invitation System
-    document.getElementById('sendInvites').addEventListener('click', sendInvitations);
-
-    function openUsernameInviteModal() {
-        document.getElementById('usernameInviteModal').classList.remove('hidden');
-        document.getElementById('usernameInviteModal').classList.add('flex');
-    }
-
-    function closeUsernameInviteModal() {
-        document.getElementById('usernameInviteModal').classList.add('hidden');
-        document.getElementById('usernameInviteModal').classList.remove('flex');
-        document.getElementById('userSearchResults').innerHTML = '';
-        document.getElementById('inviteUsername').value = '';
-    }
-
-    // Debounce function to limit API calls
-    function debounce(func, wait) {
-        let timeout;
-        return function executedFunction(...args) {
-            const later = () => {
-                clearTimeout(timeout);
-                func(...args);
-            };
-            clearTimeout(timeout);
-            timeout = setTimeout(later, wait);
-        };
-    }
-
-    // Search users as typing
-    const searchUsers = async (event) => {
-        const username = event.target.value.trim();
-        const resultsDiv = document.getElementById('userSearchResults');
-        
-        if (username.length < 2) {
-            resultsDiv.innerHTML = '';
-            return;
-        }
-
-        try {
-            const response = await fetch(`{% url 'search_users' %}?username=${username}`);
-            const data = await response.json();
-            
-            resultsDiv.innerHTML = '';
-            data.users.forEach(user => {
-                const userDiv = document.createElement('div');
-                userDiv.className = 'p-2 hover:bg-gray-100 cursor-pointer rounded';
-                userDiv.textContent = user.username;
-                userDiv.onclick = () => {
-                    document.getElementById('inviteUsername').value = user.username;
-                    resultsDiv.innerHTML = '';
-                };
-                resultsDiv.appendChild(userDiv);
-            });
-        } catch (error) {
-            console.error('Error searching users:', error);
-        }
-    };
-
-    document.getElementById('inviteUsername').addEventListener('input', debounce(searchUsers, 300));
-
-    document.getElementById('usernameInviteForm').addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const username = document.getElementById('inviteUsername').value;
-        
-        try {
-            const response = await fetch(`{% url 'invite_by_username' room.slug %}`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value
-                },
-                body: JSON.stringify({ username })
-            });
-
-            const data = await response.json();
-            
-            if (data.status === 'success') {
-                showNotification(data.message, 'success');
-                closeUsernameInviteModal();
-            } else {
-                showNotification(data.message, 'error');
-            }
-        } catch (error) {
-            showNotification('Failed to send invitation. Please try again.', 'error');
-        }
-    };
-
-    // Function to check for pending invitations
-    async function checkPendingInvitations() {
-        try {
-            const response = await fetch("{% url 'my_invitations' %}");
-            const data = await response.json();
-            
-            if (data.invitations && data.invitations.length > 0) {
-                // Show invitations in a notification or modal
-                showInvitationsNotification(data.invitations);
-            }
-        } catch (error) {
-            console.error('Error checking invitations:', error);
-        }
-    }
-
-    function showInvitationsNotification(invitations) {
-        invitations.forEach((inv, index) => {
-            const notification = document.createElement('div');
-            notification.className = 'fixed p-4 rounded-lg shadow-lg max-w-sm z-50 bg-white';
-            notification.style.bottom = `${(index * 160) + 16}px`;
-            notification.style.right = '16px';
-            
-            notification.innerHTML = `
-                <div class="mb-3">
-                    <h3 class="font-bold text-gray-900">Room Invitation</h3>
-                    <p class="text-gray-600">You've been invited to join "${inv.room_name}" by ${inv.invited_by}</p>
-                </div>
-                <div class="flex justify-end space-x-2">
-                    <button onclick="handleInvitation('${inv.code}', 'accept')"
-                        class="px-3 py-1 bg-green-500 text-white rounded hover:bg-green-600 focus:outline-none focus:ring-2 focus:ring-green-500">
-                        Accept
-                    </button>
-                    <button onclick="handleInvitation('${inv.code}', 'decline')"
-                        class="px-3 py-1 bg-red-500 text-white rounded hover:bg-red-600 focus:outline-none focus:ring-2 focus:ring-red-500">
-                        Decline
-                    </button>
-                </div>
-            `;
-            
-            document.body.appendChild(notification);
-            
-            // Store the notification element in a map to remove it later if needed
-            invitationNotifications.set(inv.code, notification);
-        });
-    }
-
-    const invitationNotifications = new Map();
-
-    async function handleInvitation(code, action) {
-        try {
-            const response = await fetch(`/rooms/invitation/${code}/handle/`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-CSRFToken': document.querySelector('[name=csrfmiddlewaretoken]').value
-                },
-                body: JSON.stringify({ action })
-            });
-
-            const data = await response.json();
-            
-            if (data.status === 'success') {
-                // Remove the invitation notification
-                const notification = invitationNotifications.get(code);
-                if (notification) {
-                    notification.remove();
-                    invitationNotifications.delete(code);
-                }
-                
-                showNotification(data.message, 'success');
-                
-                if (action === 'accept' && data.room_slug) {
-                    window.location.href = `/rooms/${data.room_slug}/`;
-                }
-            } else {
-                showNotification(data.message, 'error');
-            }
-        } catch (error) {
-            console.error('Error handling invitation:', error);
-            showNotification('Failed to process invitation. Please try again.', 'error');
-        }
-    }
-
-    // Check for pending invitations periodically
-    let checkInvitationsInterval;
-    
-    function startCheckingInvitations() {
-        // Initial check
-        checkPendingInvitations();
-        
-        // Set up periodic checks
-        checkInvitationsInterval = setInterval(checkPendingInvitations, 30000); // Check every 30 seconds
-    }
-    
-    function stopCheckingInvitations() {
-        if (checkInvitationsInterval) {
-            clearInterval(checkInvitationsInterval);
-        }
-    }
-    
-    // Start checking when page loads
-    startCheckingInvitations();
-    
-    // Clean up when page unloads
-    window.addEventListener('unload', stopCheckingInvitations);
 </script>
 {% endblock %}
 

@@ -68,6 +68,7 @@ def create_room(request):
 
 @login_required
 def room(request, slug):
+    """View for displaying a chat room."""
     room = get_object_or_404(Room, slug=slug)
     
     if room.is_private and request.user not in room.participants.all():
@@ -86,11 +87,20 @@ def room(request, slug):
         messages.error(request, "You don't have access to this room.")
         return redirect('rooms')
     
-    room_messages = Message.objects.filter(room=room).order_by('-date_added')[:50][::-1]
+    # Get messages for this room
+    messages = Message.objects.filter(room=room).order_by('-date_added')[:50]
     
+    # Get other rooms for the sidebar
     other_rooms = Room.objects.filter(
-        Q(participants=request.user) | Q(created_by=request.user)
-    ).exclude(slug=slug).order_by('-last_activity')[:10]
+        Q(participants=request.user) | Q(is_private=False)
+    ).exclude(id=room.id).distinct()
+    
+    # Get participants
+    participants = room.participants.all()
+    
+    # Add current user to participants if not already added
+    if request.user not in participants:
+        room.participants.add(request.user)
     
     is_room_admin = room.created_by == request.user
     can_invite = is_room_admin or (room.is_private and request.user in room.participants.all())
@@ -108,16 +118,17 @@ def room(request, slug):
     
     return render(request, 'room/room.html', {
         'room': room,
-        'messages': room_messages,
+        'messages': messages,
         'other_rooms': other_rooms,
+        'participants': participants,
         'is_room_admin': is_room_admin,
         'can_invite': can_invite,
-        'participants': room.participants.all(),
         'online_participants': online_participants,
     })
 
 @login_required
 def send_message(request, slug):
+    """View for handling message sending."""
     if request.method == 'POST':
         try:
             data = json.loads(request.body)
@@ -131,9 +142,11 @@ def send_message(request, slug):
                     content=content
                 )
                 
+                # Update room's last activity
                 room.last_activity = timezone.now()
                 room.save()
                 
+                # Return the created message data
                 return JsonResponse({
                     'status': 'success',
                     'message': {
@@ -145,11 +158,10 @@ def send_message(request, slug):
                         'read_by_count': 0
                     }
                 })
-                
         except json.JSONDecodeError:
-            pass
+            return JsonResponse({'status': 'error', 'message': 'Invalid JSON data'}, status=400)
             
-    return JsonResponse({'status': 'error'}, status=400)
+    return JsonResponse({'status': 'error', 'message': 'Invalid request method'}, status=400)
 
 @login_required
 def get_messages(request, slug):
