@@ -87,20 +87,18 @@ def room(request, slug):
         messages.error(request, "You don't have access to this room.")
         return redirect('rooms')
     
+    # Add current user to room participants if not already added
+    if request.user not in room.participants.all():
+        room.participants.add(request.user)
+    
     # Get messages for this room
     messages = Message.objects.filter(room=room).order_by('-date_added')[:50]
     
-    # Get other rooms for the sidebar
-    other_rooms = Room.objects.filter(
-        Q(participants=request.user) | Q(is_private=False)
-    ).exclude(id=room.id).distinct()
-    
-    # Get participants
+    # Get all participants in the room
     participants = room.participants.all()
     
-    # Add current user to participants if not already added
-    if request.user not in participants:
-        room.participants.add(request.user)
+    # Get online users (we'll implement this in the consumer)
+    online_users = room.get_online_participants()
     
     is_room_admin = room.created_by == request.user
     can_invite = is_room_admin or (room.is_private and request.user in room.participants.all())
@@ -114,16 +112,13 @@ def room(request, slug):
     for message in unread_messages:
         message.mark_as_read(request.user)
     
-    online_participants = room.get_online_participants()
-    
     return render(request, 'room/room.html', {
         'room': room,
         'messages': messages,
-        'other_rooms': other_rooms,
         'participants': participants,
+        'online_users': online_users,
         'is_room_admin': is_room_admin,
         'can_invite': can_invite,
-        'online_participants': online_participants,
     })
 
 @login_required

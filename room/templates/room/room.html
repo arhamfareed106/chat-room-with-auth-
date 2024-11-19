@@ -1,220 +1,177 @@
 {% extends 'core/base.html' %}
 
-{% block title %}{{ room.name }} | {% endblock %}
-
 {% block content %}
-{% csrf_token %}
-<div class="flex h-screen bg-gray-100">
-    <!-- Sidebar -->
-    <div class="w-1/4 bg-white border-r border-gray-200 overflow-y-auto">
-        <div class="p-4 border-b border-gray-200">
-            <h2 class="text-xl font-semibold text-gray-800">Rooms</h2>
-            <a href="{% url 'create_room' %}" class="mt-2 flex items-center text-sm text-teal-600 hover:text-teal-700">
-                <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
-                </svg>
-                Create New Room
-            </a>
-        </div>
-        
-        <!-- Other Rooms List -->
-        <div class="p-4">
-            <h3 class="text-sm font-medium text-gray-500 mb-3">Your Other Rooms</h3>
-            {% for other_room in other_rooms %}
-            <a href="{% url 'room' other_room.slug %}" 
-               class="block p-3 mb-2 rounded-lg hover:bg-gray-50 {% if other_room == room %}bg-teal-50 border border-teal-100{% endif %}">
-                <div class="flex justify-between items-center">
-                    <span class="font-medium text-gray-900">{{ other_room.name }}</span>
-                    {% if other_room.unread_count %}
-                    <span class="bg-teal-100 text-teal-800 text-xs font-medium px-2.5 py-0.5 rounded-full">
-                        {{ other_room.unread_count }}
-                    </span>
-                    {% endif %}
-                </div>
-            </a>
-            {% endfor %}
-        </div>
+<div class="chat-container">
+    <!-- Simple header -->
+    <div class="chat-header">
+        <h2>{{ room.name }}</h2>
+        <span class="online-count" id="online-count">{{ online_users|length }} online</span>
     </div>
 
-    <!-- Main Chat Area -->
-    <div class="flex-1 flex flex-col">
-        <!-- Room Header -->
-        <div class="bg-white border-b border-gray-200 p-4">
-            <div class="flex justify-between items-center">
-                <div>
-                    <h1 class="text-2xl font-bold text-gray-800">{{ room.name }}</h1>
-                    <div class="flex items-center mt-1 text-sm text-gray-500">
-                        <span>{{ participants.count }} participants</span>
-                        <span class="mx-2">•</span>
-                        <span>{% if room.is_private %}Private Room{% else %}Public Room{% endif %}</span>
-                    </div>
-                </div>
-                <div class="flex items-center space-x-2">
-                    {% if is_room_admin %}
-                    <button id="roomSettingsBtn" class="p-2 text-gray-500 hover:text-gray-700 rounded-lg hover:bg-gray-100">
-                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" 
-                                  d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c-.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
-                        </svg>
-                    </button>
-                    {% endif %}
-                    {% if room.is_private and can_invite %}
-                        <button id="inviteBtn" class="flex items-center px-3 py-2 text-sm font-medium text-white bg-teal-600 rounded-lg hover:bg-teal-700">
-                            <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
-                            </svg>
-                            Invite
-                        </button>
-                    {% endif %}
-                    {% if is_room_admin or user in room.participants.all %}
-                        <button onclick="showInviteModal()"
-                            class="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-teal-600 hover:bg-teal-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-teal-500">
-                            Invite Users
-                        </button>
-                        <button onclick="generateInviteLink()"
-                            class="px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-teal-500">
-                            Generate Invite Link
-                        </button>
-                        <button onclick="openEmailInviteModal()"
-                            class="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
-                            Invite by Email
-                        </button>
-                        <button onclick="openUsernameInviteModal()"
-                            class="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
-                            Invite User
-                        </button>
-                    {% endif %}
-                </div>
+    <!-- Chat area with messages -->
+    <div class="chat-messages" id="chat-messages">
+        {% for message in messages %}
+        <div class="message {% if message.user == request.user %}message-own{% endif %}">
+            <div class="message-info">
+                <span class="username">{{ message.user.username }}</span>
+                <span class="time">{{ message.date_added|time:"H:i" }}</span>
             </div>
+            <div class="message-content">{{ message.content }}</div>
         </div>
-
-        <!-- Messages Area -->
-        <div class="flex-1 overflow-y-auto p-4 space-y-4" id="chat-messages">
-            {% for message in messages %}
-            <div class="flex {% if message.user == request.user %}justify-end{% endif %}" data-message-id="{{ message.id }}">
-                <div class="{% if message.user == request.user %}bg-teal-100 text-teal-900{% else %}bg-gray-100 text-gray-900{% endif %} rounded-lg px-4 py-2 max-w-[70%] group">
-                    <div class="flex items-center {% if message.user == request.user %}justify-end{% endif %} mb-1">
-                        <span class="font-medium">{{ message.user.username }}</span>
-                        <span class="text-xs text-gray-500 ml-2">{{ message.date_added|time:"g:i A" }}</span>
-                        {% if message.user == request.user %}
-                        <span class="read-status ml-2 opacity-0 group-hover:opacity-100 transition-opacity text-xs text-gray-500">
-                            {% if message.read_by_users.count > 0 %}
-                                Read by {{ message.read_by_users.count }}
-                            {% else %}
-                                Sent
-                            {% endif %}
-                        </span>
-                        {% endif %}
-                    </div>
-                    <p class="text-sm break-words">{{ message.content }}</p>
-                </div>
-            </div>
-            {% endfor %}
-        </div>
-
-        <!-- Load More Messages -->
-        <div id="load-more" class="text-center p-2 text-sm text-teal-600 hover:text-teal-700 cursor-pointer hidden">
-            Load earlier messages
-        </div>
-
-        <!-- Typing Indicator -->
-        <div id="typing-status" class="px-4 py-2 text-sm text-gray-500"></div>
-
-        <!-- Message Input -->
-        <form id="chat-form" class="bg-white border-t border-gray-200 p-4">
-            {% csrf_token %}
-            <div class="flex items-center space-x-2">
-                <input type="text" id="chat-message-input" 
-                       class="flex-1 rounded-lg border-gray-300 focus:border-teal-500 focus:ring-teal-500"
-                       placeholder="Type your message...">
-                <button type="submit" 
-                        class="px-4 py-2 bg-teal-600 text-white rounded-lg hover:bg-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:ring-offset-2">
-                    Send
-                </button>
-            </div>
-        </form>
+        {% endfor %}
     </div>
 
-    <!-- Participants Sidebar -->
-    <div class="w-1/4 bg-white border-l border-gray-200 overflow-y-auto">
-        <div class="p-4 border-b border-gray-200">
-            <h2 class="text-xl font-semibold text-gray-800">Participants</h2>
-        </div>
-        <div class="p-4">
-            {% for participant in participants %}
-            <div class="flex items-center space-x-3 mb-3">
-                <div class="w-2 h-2 rounded-full {% if participant in room.get_online_participants %}bg-green-500{% else %}bg-gray-300{% endif %}"></div>
-                <span class="text-gray-900 {% if participant == request.user %}font-medium{% endif %}">
-                    {{ participant.username }}
-                    {% if participant == room.created_by %}
-                    <span class="text-xs text-gray-500">(Admin)</span>
-                    {% endif %}
-                </span>
+    <!-- Typing indicator -->
+    <div class="typing-indicator" id="typing-status"></div>
+
+    <!-- Simple message input -->
+    <form id="chat-form" class="chat-input">
+        {% csrf_token %}
+        <input type="text" id="chat-message-input" placeholder="Type a message...">
+        <button type="submit">Send</button>
+    </form>
+
+    <!-- Online users sidebar -->
+    <div class="online-users">
+        <h3>Online Users</h3>
+        <div id="online-users" class="users-list">
+            {% for user in online_users %}
+            <div class="user-item" data-username="{{ user }}">
+                • {{ user }}
             </div>
             {% endfor %}
         </div>
     </div>
 </div>
 
-<!-- Invite Modal -->
-<div id="inviteModal" class="hidden fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
-    <div class="relative top-20 mx-auto p-5 border w-[480px] shadow-lg rounded-md bg-white">
-        <div class="mt-3">
-            <div class="flex justify-between items-center pb-3 border-b">
-                <h3 class="text-xl font-semibold text-gray-900">Invite to Room</h3>
-                <button onclick="closeInviteModal()" class="text-gray-400 hover:text-gray-500">
-                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
-                    </svg>
-                </button>
-            </div>
+<style>
+    .chat-container {
+        display: grid;
+        grid-template-columns: 1fr 200px;
+        grid-template-rows: auto 1fr auto auto;
+        height: 100vh;
+        background: #fff;
+    }
 
-            <div class="mt-4">
-                <div class="flex items-center space-x-2 mb-4">
-                    <input type="text" id="searchUsers" placeholder="Search users by username..." 
-                        class="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-teal-500">
-                    <button onclick="generateInviteLink()" 
-                        class="px-4 py-2 text-sm bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 focus:outline-none focus:ring-2 focus:ring-gray-300">
-                        Generate Link
-                    </button>
-                </div>
+    .chat-header {
+        grid-column: 1 / -1;
+        padding: 15px;
+        background: #f0f0f0;
+        border-bottom: 1px solid #ddd;
+    }
 
-                <div class="mb-4">
-                    <h4 class="text-sm font-medium text-gray-700 mb-2">Selected Users</h4>
-                    <div id="selectedUsers" class="min-h-[40px] p-2 bg-gray-50 rounded-lg">
-                        <!-- Selected users will appear here -->
-                    </div>
-                </div>
+    .chat-header h2 {
+        margin: 0;
+        font-size: 18px;
+    }
 
-                <div class="border rounded-lg">
-                    <div class="p-3 bg-gray-50 border-b">
-                        <h4 class="text-sm font-medium text-gray-700">Available Users</h4>
-                    </div>
-                    <div id="userList" class="max-h-[240px] overflow-y-auto p-2">
-                        <!-- User list will be populated here -->
-                    </div>
-                </div>
-            </div>
+    .online-count {
+        font-size: 14px;
+        color: #666;
+    }
 
-            <div class="mt-4 flex justify-end space-x-3 border-t pt-4">
-                <button onclick="closeInviteModal()"
-                    class="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-teal-500">
-                    Cancel
-                </button>
-                <button id="sendInvites" onclick="sendInvitations()"
-                    class="px-4 py-2 text-sm font-medium text-white bg-teal-600 rounded-lg hover:bg-teal-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-teal-500">
-                    Send Invitations
-                </button>
-            </div>
-        </div>
-    </div>
-</div>
+    .chat-messages {
+        grid-column: 1;
+        overflow-y: auto;
+        padding: 15px;
+        background: #fff;
+        height: calc(100vh - 180px);
+    }
 
-<!-- Notifications Container -->
-<div id="notificationsContainer" class="fixed top-4 right-4 z-50 space-y-2">
-    <!-- Notifications will be dynamically added here -->
-</div>
+    .message {
+        margin-bottom: 15px;
+        max-width: 80%;
+    }
+
+    .message-own {
+        margin-left: auto;
+    }
+
+    .message-info {
+        margin-bottom: 5px;
+        font-size: 14px;
+    }
+
+    .username {
+        font-weight: bold;
+        color: #333;
+    }
+
+    .time {
+        color: #999;
+        margin-left: 10px;
+    }
+
+    .message-content {
+        padding: 10px;
+        background: #f0f0f0;
+        border-radius: 5px;
+        word-wrap: break-word;
+    }
+
+    .message-own .message-content {
+        background: #007bff;
+        color: white;
+    }
+
+    .typing-indicator {
+        grid-column: 1;
+        padding: 5px 15px;
+        color: #666;
+        font-size: 14px;
+    }
+
+    .chat-input {
+        grid-column: 1;
+        display: flex;
+        padding: 15px;
+        background: #f0f0f0;
+        border-top: 1px solid #ddd;
+    }
+
+    .chat-input input {
+        flex: 1;
+        padding: 8px;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        margin-right: 10px;
+    }
+
+    .chat-input button {
+        padding: 8px 20px;
+        background: #007bff;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+    }
+
+    .chat-input button:hover {
+        background: #0056b3;
+    }
+
+    .online-users {
+        grid-column: 2;
+        grid-row: 2 / span 3;
+        padding: 15px;
+        background: #f8f9fa;
+        border-left: 1px solid #ddd;
+    }
+
+    .online-users h3 {
+        margin: 0 0 15px 0;
+        font-size: 16px;
+    }
+
+    .users-list {
+        font-size: 14px;
+    }
+
+    .user-item {
+        padding: 5px 0;
+        color: #333;
+    }
+</style>
 
 <script>
     const roomName = '{{ room.slug }}';
@@ -225,6 +182,8 @@
     const chatForm = document.getElementById('chat-form');
     const chatInput = document.getElementById('chat-message-input');
     const typingStatus = document.getElementById('typing-status');
+    const onlineUsers = document.getElementById('online-users');
+    const onlineCount = document.getElementById('online-count');
     let typingTimeout;
 
     // Scroll to bottom of messages
@@ -233,54 +192,83 @@
     }
     scrollToBottom();
 
-    // Handle WebSocket connection open
+    // Handle WebSocket connection
     chatSocket.onopen = function(e) {
-        console.log('WebSocket Connected');
-    };
-
-    // Handle WebSocket connection error
-    chatSocket.onerror = function(e) {
-        console.error('WebSocket Error:', e);
-    };
-
-    // Handle WebSocket connection close
-    chatSocket.onclose = function(e) {
-        console.log('WebSocket Disconnected');
+        console.log('Connected to chat');
     };
 
     // Handle incoming messages
     chatSocket.onmessage = function(e) {
         const data = JSON.parse(e.data);
-        console.log('Received:', data);  // Debug log
+        console.log('Received:', data);
 
-        if (data.type === 'message') {
-            // Create message element
-            const messageDiv = document.createElement('div');
-            const isOwnMessage = data.username === '{{ request.user.username }}';
-            
-            messageDiv.className = `flex ${isOwnMessage ? 'justify-end' : ''} mb-4`;
-            messageDiv.innerHTML = `
-                <div class="${isOwnMessage ? 'bg-teal-100 text-teal-900' : 'bg-gray-100 text-gray-900'} rounded-lg px-4 py-2 max-w-[70%]">
-                    <div class="flex items-center gap-2 mb-1">
-                        <span class="font-medium">${data.username}</span>
-                        <span class="text-xs text-gray-500">${new Date(data.timestamp).toLocaleTimeString()}</span>
-                    </div>
-                    <p class="text-sm break-words">${data.message}</p>
-                </div>
-            `;
-            
-            chatMessages.appendChild(messageDiv);
-            scrollToBottom();
-        } else if (data.type === 'typing_status') {
-            if (data.username !== '{{ request.user.username }}') {
-                if (data.is_typing) {
-                    typingStatus.textContent = `${data.username} is typing...`;
-                } else {
-                    typingStatus.textContent = '';
-                }
-            }
+        switch(data.type) {
+            case 'message':
+                appendMessage(data);
+                break;
+            case 'typing_status':
+                handleTypingStatus(data);
+                break;
+            case 'user_join':
+                handleUserJoin(data);
+                break;
+            case 'user_leave':
+                handleUserLeave(data);
+                break;
         }
     };
+
+    // Append a new message
+    function appendMessage(data) {
+        const messageDiv = document.createElement('div');
+        const isOwnMessage = data.username === '{{ request.user.username }}';
+        
+        messageDiv.className = `message ${isOwnMessage ? 'message-own' : ''}`;
+        messageDiv.innerHTML = `
+            <div class="message-info">
+                <span class="username">${data.username}</span>
+                <span class="time">${new Date(data.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
+            </div>
+            <div class="message-content">${data.message}</div>
+        `;
+        
+        chatMessages.appendChild(messageDiv);
+        scrollToBottom();
+    }
+
+    // Handle typing status
+    function handleTypingStatus(data) {
+        if (data.username !== '{{ request.user.username }}') {
+            typingStatus.textContent = data.is_typing ? `${data.username} is typing...` : '';
+        }
+    }
+
+    // Handle user join
+    function handleUserJoin(data) {
+        if (!document.querySelector(`.user-item[data-username="${data.username}"]`)) {
+            const userDiv = document.createElement('div');
+            userDiv.className = 'user-item';
+            userDiv.dataset.username = data.username;
+            userDiv.textContent = `• ${data.username}`;
+            onlineUsers.appendChild(userDiv);
+            
+            // Update count
+            const count = parseInt(onlineCount.textContent) + 1;
+            onlineCount.textContent = `${count} online`;
+        }
+    }
+
+    // Handle user leave
+    function handleUserLeave(data) {
+        const userElement = document.querySelector(`.user-item[data-username="${data.username}"]`);
+        if (userElement) {
+            userElement.remove();
+            
+            // Update count
+            const count = parseInt(onlineCount.textContent) - 1;
+            onlineCount.textContent = `${count} online`;
+        }
+    }
 
     // Handle message sending
     chatForm.addEventListener('submit', function(e) {
@@ -288,13 +276,11 @@
         
         const message = chatInput.value.trim();
         if (message) {
-            // Send message through WebSocket
             chatSocket.send(JSON.stringify({
                 'type': 'message',
                 'message': message
             }));
             
-            // Clear input
             chatInput.value = '';
         }
     });
@@ -316,7 +302,4 @@
         }, 1000);
     });
 </script>
-{% endblock %}
-
-{% block scripts %}
 {% endblock %}
