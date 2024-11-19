@@ -361,11 +361,23 @@ def search_users(request):
 
 @login_required
 def my_invitations(request):
+    """View for displaying user's pending invitations."""
     invitations = Invitation.objects.filter(
         invited_user=request.user,
         status='pending'
     ).select_related('room', 'inviting_user')
     
+    # Return JSON response for AJAX requests
+    if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+        invitations_data = [{
+            'code': str(inv.code),
+            'room_name': inv.room.name,
+            'invited_by': inv.inviting_user.username,
+            'created_at': inv.created_at.isoformat()
+        } for inv in invitations]
+        return JsonResponse({'invitations': invitations_data})
+    
+    # Return normal template response for direct visits
     return render(request, 'room/my_invitations.html', {
         'invitations': invitations
     })

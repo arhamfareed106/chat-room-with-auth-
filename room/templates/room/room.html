@@ -236,15 +236,85 @@
 </div>
 
 <script>
-    const roomName = {{ room.slug|safe }};
-    const chatMessages = document.querySelector('#chat-messages');
-    const chatMessageInput = document.querySelector('#chat-message-input');
-    const chatForm = document.querySelector('#chat-form');
-    const typingStatus = document.querySelector('#typing-status');
-    const loadMoreBtn = document.querySelector('#load-more');
-    let typingTimeout;
+    // Get the chat messages container and form
+    const chatMessages = document.getElementById('chat-messages');
+    const chatForm = document.getElementById('chat-form');
+    const chatMessageInput = document.getElementById('chat-message-input');
+    const typingStatus = document.getElementById('typing-status');
     let lastMessageId = null;
     let isLoadingMessages = false;
+
+    // Create WebSocket connection
+    const roomName = '{{ room.slug }}';
+    const chatSocket = new WebSocket(
+        'ws://' + window.location.host + '/ws/chat/' + roomName + '/'
+    );
+
+    // Handle WebSocket connection open
+    chatSocket.onopen = function(e) {
+        console.log('WebSocket connection established');
+    };
+
+    // Handle WebSocket connection error
+    chatSocket.onerror = function(e) {
+        console.error('WebSocket error:', e);
+    };
+
+    // Handle WebSocket connection close
+    chatSocket.onclose = function(e) {
+        console.log('WebSocket connection closed');
+    };
+
+    // Handle incoming WebSocket messages
+    chatSocket.onmessage = function(e) {
+        const data = JSON.parse(e.data);
+        
+        switch(data.type) {
+            case 'message':
+                appendMessage(data);
+                break;
+            case 'typing_status':
+                handleTypingStatus(data);
+                break;
+            case 'user_join':
+            case 'user_leave':
+                handleUserPresence(data);
+                break;
+            case 'read_receipt':
+                updateReadReceipt(data);
+                break;
+        }
+    };
+
+    function appendMessage(data) {
+        const messageElement = document.createElement('div');
+        const isOwnMessage = data.username === '{{ request.user.username }}';
+        
+        messageElement.className = `flex ${isOwnMessage ? 'justify-end' : ''}`;
+        messageElement.dataset.messageId = data.message_id;
+        
+        messageElement.innerHTML = `
+            <div class="${isOwnMessage ? 'bg-teal-100 text-teal-900' : 'bg-gray-100 text-gray-900'} rounded-lg px-4 py-2 max-w-[70%] group">
+                <div class="flex items-center ${isOwnMessage ? 'justify-end' : ''} mb-1">
+                    <span class="font-medium">${data.username}</span>
+                    <span class="text-xs text-gray-500 ml-2">${new Date(data.timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span>
+                    ${isOwnMessage ? `
+                        <span class="read-status ml-2 opacity-0 group-hover:opacity-100 transition-opacity text-xs text-gray-500">
+                            Sent
+                        </span>
+                    ` : ''}
+                </div>
+                <p class="text-sm break-words">${data.message}</p>
+            </div>
+        `;
+        
+        chatMessages.appendChild(messageElement);
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+        
+        if (!isOwnMessage) {
+            markMessageAsRead(data.message_id);
+        }
+    }
 
     // Initialize emoji picker
     const emojiButton = document.querySelector('#emoji-button');
@@ -263,86 +333,6 @@
             // You can implement file upload functionality here
             alert('File upload coming soon!');
         });
-    }
-
-    // Create WebSocket connection
-    const chatSocket = new WebSocket(
-        'ws://' + window.location.host + '/ws/chat/' + roomName + '/'
-    );
-
-    chatSocket.onmessage = function(e) {
-        const data = JSON.parse(e.data);
-
-        if (data.type === 'message') {
-            // Handle new message
-            appendMessage(data);
-        } else if (data.type === 'typing') {
-            // Handle typing status
-            handleTypingStatus(data);
-        } else if (data.type === 'user_join' || data.type === 'user_leave') {
-            // Handle user presence
-            handleUserPresence(data);
-        } else if (data.type === 'read_receipt') {
-            // Handle read receipts
-            updateReadReceipt(data);
-        }
-    };
-
-    function appendMessage(data) {
-        const isOwnMessage = data.username === '{{ request.user.username }}';
-        const messageElement = document.createElement('div');
-        messageElement.className = `flex ${isOwnMessage ? 'justify-end' : ''}`;
-        messageElement.dataset.messageId = data.message_id;
-        
-        messageElement.innerHTML = `
-            <div class="${isOwnMessage ? 'bg-teal-100 text-teal-900' : 'bg-gray-100 text-gray-900'} rounded-lg px-4 py-2 max-w-[70%] group">
-                <div class="flex items-center ${isOwnMessage ? 'justify-end' : ''} mb-1">
-                    <span class="font-medium text-sm">${data.username}</span>
-                    <span class="text-xs text-gray-500 ml-2">${new Date(data.timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span>
-                    ${isOwnMessage ? `
-                        <span class="read-status ml-2 opacity-0 group-hover:opacity-100 transition-opacity text-xs text-gray-500">
-                            Sent
-                        </span>
-                    ` : ''}
-                </div>
-                <p class="text-sm">${data.message}</p>
-            </div>
-        `;
-        
-        chatMessages.appendChild(messageElement);
-        chatMessages.scrollTop = chatMessages.scrollHeight;
-        
-        // Mark message as read if it's not our own
-        if (!isOwnMessage) {
-            markMessageAsRead(data.message_id);
-        }
-    }
-
-    function handleTypingStatus(data) {
-        if (data.is_typing && data.username !== '{{ request.user.username }}') {
-            typingStatus.textContent = `${data.username} is typing...`;
-        } else {
-            typingStatus.textContent = '';
-        }
-    }
-
-    function handleUserPresence(data) {
-        const notification = document.createElement('div');
-        notification.className = 'text-center text-sm text-gray-500 my-2';
-        notification.textContent = `${data.username} ${data.type === 'user_join' ? 'joined' : 'left'} the chat`;
-        chatMessages.appendChild(notification);
-        chatMessages.scrollTop = chatMessages.scrollHeight;
-        updateParticipantCount(data.participant_count);
-    }
-
-    function updateReadReceipt(data) {
-        const messageElement = document.querySelector(`[data-message-id="${data.message_id}"]`);
-        if (messageElement) {
-            const readStatus = messageElement.querySelector('.read-status');
-            if (readStatus) {
-                readStatus.textContent = `Read by ${data.read_by_count}`;
-            }
-        }
     }
 
     // Handle message sending
@@ -727,7 +717,7 @@
     // Function to check for pending invitations
     async function checkPendingInvitations() {
         try {
-            const response = await fetch("{% url 'get_pending_invitations' %}");
+            const response = await fetch("{% url 'my_invitations' %}");
             const data = await response.json();
             
             if (data.invitations && data.invitations.length > 0) {
