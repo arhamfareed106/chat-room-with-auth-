@@ -37,7 +37,7 @@ A modern, feature-rich chat application built with Django and WebSockets, featur
 
 1. Clone the repository:
 ```bash
-git clone [your-repository-url]
+git clone https://github.com/arhamfareed106/chat-room-with-auth-
 cd djangochat
 ```
 
