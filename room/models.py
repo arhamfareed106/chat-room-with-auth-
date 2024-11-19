@@ -52,20 +52,33 @@ class Message(models.Model):
                 self.save()
 
 class Invitation(models.Model):
-    room = models.ForeignKey(Room, on_delete=models.CASCADE, related_name='invitations')
-    invited_by = models.ForeignKey(User, on_delete=models.CASCADE, related_name='sent_invitations')
-    invited_user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='received_invitations', null=True, blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    accepted = models.BooleanField(default=False)
-    invite_code = models.UUIDField(default=uuid.uuid4, editable=False, unique=True)
-    
-    class Meta:
-        unique_together = ['room', 'invited_user']
-        ordering = ['-created_at']
+    INVITATION_STATUS = (
+        ('pending', 'Pending'),
+        ('accepted', 'Accepted'),
+        ('declined', 'Declined'),
+        ('expired', 'Expired')
+    )
 
-    def __str__(self):
-        return f"Invitation to {self.room.name} for {self.invited_user.username if self.invited_user else 'anyone'}"
+    room = models.ForeignKey(Room, related_name='invitations', on_delete=models.CASCADE)
+    invited_by = models.ForeignKey(User, related_name='sent_invitations', on_delete=models.CASCADE)
+    invited_user = models.ForeignKey(User, related_name='received_invitations', null=True, blank=True, on_delete=models.CASCADE)
+    invited_email = models.EmailField(null=True, blank=True)
+    invite_code = models.UUIDField(default=uuid.uuid4, editable=False, unique=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    status = models.CharField(max_length=10, choices=INVITATION_STATUS, default='pending')
+    is_email_sent = models.BooleanField(default=False)
+
+    def save(self, *args, **kwargs):
+        if not self.expires_at:
+            # Set default expiration to 7 days from creation
+            self.expires_at = timezone.now() + timezone.timedelta(days=7)
+        super().save(*args, **kwargs)
 
     def is_expired(self):
-        """Check if the invitation has expired (7 days)"""
-        return timezone.now() > self.created_at + timezone.timedelta(days=7)
+        return timezone.now() > self.expires_at
+
+    def __str__(self):
+        if self.invited_user:
+            return f"Invitation for {self.invited_user.username} to join {self.room.name}"
+        return f"Invitation for {self.invited_email} to join {self.room.name}"
